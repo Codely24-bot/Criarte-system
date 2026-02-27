@@ -134,7 +134,53 @@ const dashboardKPIs = () => {
   }
 }
 
+const getClientById = (clientId) => state.clients.find((c) => c.id === clientId) || null
 const clientName = (clientId) => state.clients.find((c) => c.id === clientId)?.fullName || '-'
+
+const normalizePhone = (phone) => String(phone || '').replace(/\D/g, '')
+
+const openFileForWhatsAppAttach = (order) => {
+  if (!order.finalFileData) return
+  const fileWindow = window.open(order.finalFileData, '_blank')
+  if (!fileWindow) {
+    alert('Nao foi possivel abrir o arquivo automaticamente. Verifique o bloqueador de pop-up.')
+  }
+}
+
+const notifyFinishedOrder = (order) => {
+  const client = getClientById(order.clientId)
+  if (!client) return
+
+  const rawPhone = normalizePhone(client.phone)
+  if (!rawPhone) {
+    alert('Pedido finalizado, mas o cliente nao possui telefone valido para WhatsApp.')
+    return
+  }
+
+  const hasFile = Boolean(order.finalFileName && order.finalFileData)
+  const message = [
+    `Ola, ${client.fullName}!`,
+    `Seu pedido de ${order.serviceType} foi finalizado.`,
+    hasFile ? `Arquivo pronto: ${order.finalFileName}.` : 'O arquivo final ainda nao foi anexado no sistema.',
+    'Equipe Criarte.'
+  ].join(' ')
+
+  const shouldOpenWhatsApp = confirm(
+    hasFile
+      ? 'Pedido marcado como Finalizado. Deseja abrir o WhatsApp e o arquivo para envio ao cliente?'
+      : 'Pedido marcado como Finalizado. Deseja abrir o WhatsApp para avisar o cliente?'
+  )
+
+  if (!shouldOpenWhatsApp) return
+
+  window.open(`https://wa.me/55${rawPhone}?text=${encodeURIComponent(message)}`, '_blank')
+  if (hasFile) {
+    openFileForWhatsAppAttach(order)
+    alert('WhatsApp aberto. O arquivo foi aberto em outra aba para voce anexar na conversa.')
+  } else {
+    alert('WhatsApp aberto. Anexe o arquivo antes de enviar a mensagem ao cliente.')
+  }
+}
 
 const renderLogin = () => {
   root.innerHTML = `
@@ -659,14 +705,25 @@ const bindOrderEvents = () => {
       finalFileData: parsedFile.data || base?.finalFileData || ''
     }
 
+    const transitionedToFinished = payload.orderStatus === 'Finalizado' && base?.orderStatus !== 'Finalizado'
+    let savedOrder = null
+
     if (state.editingOrderId) {
-      state.orders = state.orders.map((o) => (o.id === state.editingOrderId ? { ...o, ...payload } : o))
+      state.orders = state.orders.map((o) => {
+        if (o.id !== state.editingOrderId) return o
+        savedOrder = { ...o, ...payload }
+        return savedOrder
+      })
       state.editingOrderId = null
     } else {
-      state.orders.unshift({ id: id('o'), ...payload })
+      savedOrder = { id: id('o'), ...payload }
+      state.orders.unshift(savedOrder)
     }
 
     saveData()
+    if (savedOrder && (transitionedToFinished || (!base && savedOrder.orderStatus === 'Finalizado'))) {
+      notifyFinishedOrder(savedOrder)
+    }
     renderApp()
   })
 
